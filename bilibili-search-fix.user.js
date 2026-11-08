@@ -151,28 +151,20 @@
     }
 
     function isItemStronglyRelevant(item, searchKeyword) {
-        if (!item) return false;
-        if (item.type && item.type !== 'video') return false;
+        if (!item || (item.type && item.type !== 'video')) return false;
         if (!searchKeyword) return true;
-
-        if (hasOfficialKeywordHighlight(item)) return true;
-        if (Array.isArray(item.hit_columns) && item.hit_columns.length > 0) return true;
+        if (hasOfficialKeywordHighlight(item) || (Array.isArray(item.hit_columns) && item.hit_columns.length > 0)) return true;
 
         const tokens = tokenizeSearchKeyword(searchKeyword);
         if (tokens.length === 0) return true;
 
-        const cleanTitle = stripHtml(item.title).toLowerCase();
-        const cleanTag = stripHtml(item.tag).toLowerCase();
-        const cleanAuthor = stripHtml(item.author || item.uname).toLowerCase();
-        const cleanDesc = stripHtml(item.description || item.desc).toLowerCase();
+        const title = stripHtml(item.title).toLowerCase(), tag = stripHtml(item.tag).toLowerCase();
+        const author = stripHtml(item.author || item.uname).toLowerCase(), desc = stripHtml(item.description || item.desc).toLowerCase();
         const itemTags = extractItemTags(item);
 
-        return tokens.some(token =>
-            cleanTitle.includes(token) ||
-            cleanTag.includes(token) ||
-            cleanAuthor.includes(token) ||
-            cleanDesc.includes(token) ||
-            itemTags.some(t => t.includes(token) || token.includes(t))
+        return tokens.some(t =>
+            title.includes(t) || tag.includes(t) || author.includes(t) || desc.includes(t) ||
+            itemTags.some(it => it.includes(t) || t.includes(it))
         );
     }
 
@@ -276,10 +268,8 @@
                 if (idKey && !loggedKeptBvids.has(idKey)) {
                     loggedKeptBvids.add(idKey);
                     keptBatch.push({
-                        bvid: item.bvid || 'N/A',
-                        aid: item.aid || item.id || 'N/A',
-                        title: itemTitle,
-                        tag: itemTags,
+                        bvid: item.bvid || 'N/A', aid: item.aid || item.id || 'N/A',
+                        title: itemTitle, tag: itemTags,
                         matchedBy: getMatchReason(item, searchKeyword, matchedTag)
                     });
                 }
@@ -287,14 +277,10 @@
                 if (idKey && !loggedBvids.has(idKey)) {
                     loggedBvids.add(idKey);
                     filteredBatch.push({
-                        bvid: item.bvid || 'N/A',
-                        aid: item.aid || item.id || 'N/A',
-                        title: itemTitle,
-                        tag: itemTags,
-                        hit_columns: item.hit_columns || [],
-                        typename: item.typename || '',
-                        author: item.author || item.uname || '',
-                        reason
+                        bvid: item.bvid || 'N/A', aid: item.aid || item.id || 'N/A',
+                        title: itemTitle, tag: itemTags,
+                        hit_columns: item.hit_columns || [], typename: item.typename || '',
+                        author: item.author || item.uname || '', reason
                     });
                 }
                 if (currentMode === MODE_BLUR) kept.push(item);
@@ -310,19 +296,13 @@
 
     function cleanSearchDataPayload(container, searchKeyword) {
         if (!container || typeof container !== 'object') return container;
-
         resetContextIfKeywordChanged(searchKeyword);
-
         if (container.data && typeof container.data === 'object') {
             cleanSearchDataPayload(container.data, searchKeyword);
             return container;
         }
-        if (container.searchResponse && container.searchResponse.searchAllResponse) {
-            cleanSearchDataPayload(container.searchResponse.searchAllResponse, searchKeyword);
-        }
-        if (container.searchTypeResponse && container.searchTypeResponse.searchTypeResponse) {
-            cleanSearchDataPayload(container.searchTypeResponse.searchTypeResponse, searchKeyword);
-        }
+        const sr = container.searchResponse?.searchAllResponse || container.searchTypeResponse?.searchTypeResponse;
+        if (sr) cleanSearchDataPayload(sr, searchKeyword);
 
         if (Array.isArray(container.result)) {
             const isSectionList = container.result.some(r => r && (r.result_type || Array.isArray(r.data)));
@@ -331,6 +311,11 @@
                     if (!section || section.result_type === 'brand_ad' || section.result_type === 'tips') return false;
                     if (section.result_type === 'video' && Array.isArray(section.data)) {
                         section.data = cleanVideoList(section.data, searchKeyword);
+                    }
+                    if ((section.result_type === 'bili_user' || section.result_type === 'user') && Array.isArray(section.data)) {
+                        section.data.forEach(u => {
+                            if (u && Array.isArray(u.res)) u.res.forEach(item => recordItemVerdict(item, true));
+                        });
                     }
                     return true;
                 });
@@ -453,6 +438,10 @@
     }
 
     function isCardIrrelevant(card, keyword) {
+        if (card.closest('.b-user-video-card, .user-video-info, .user-list, .search-user-card, [class*="user-card"], [class*="user-video"], .user-info')) {
+            return false;
+        }
+
         const link = card.querySelector('a[href*="/video/"]');
         const href = link ? (link.getAttribute('href') || '') : '';
         const bvidMatch = href.match(/BV[a-zA-Z0-9]+/i);
