@@ -93,7 +93,7 @@
 
     function hasOfficialKeywordHighlight(item, tokens) {
         if (!item) return false;
-        const m = ((item.title || '') + (item.description || item.desc || '')).match(/<em\s+class=["']keyword["']>(.*?)<\/em>/gi);
+        const m = ((item.title || '') + (item.description || item.desc || item.subtitle || '')).match(/<em\s+class=["']keyword["']>(.*?)<\/em>/gi);
         if (!m) return false;
         if (!tokens || !tokens.length) return true;
         return m.some(tag => {
@@ -110,13 +110,13 @@
     }
 
     function isItemStronglyRelevant(item, searchKeyword) {
-        if (!item || (item.type && item.type !== 'video')) return false;
+        if (!item || (item.type && item.type !== 'video' && item.type !== 'ketang')) return false;
         const cleanKw = searchKeyword.trim().toLowerCase();
         const tokens = tokenizeSearchKeyword(cleanKw);
         if (hasOfficialKeywordHighlight(item, tokens) || (Array.isArray(item.hit_columns) && item.hit_columns.length > 0)) return true;
 
         const title = stripHtml(item.title).toLowerCase(), tag = stripHtml(item.tag).toLowerCase();
-        const author = stripHtml(item.author || item.uname).toLowerCase(), desc = stripHtml(item.description || item.desc).toLowerCase();
+        const author = stripHtml(item.author || item.uname).toLowerCase(), desc = stripHtml(item.description || item.desc || item.subtitle).toLowerCase();
         const itemTags = extractItemTags(item);
 
         return tokens.some(t =>
@@ -271,7 +271,7 @@
             c.result = c.result.some(r => r && (r.result_type || Array.isArray(r.data)))
                 ? c.result.filter(sec => {
                     if (!sec || sec.result_type === 'brand_ad' || sec.result_type === 'tips') return false;
-                    if (sec.result_type === 'video' && Array.isArray(sec.data)) sec.data = cleanVideoList(sec.data, cleanKw);
+                    if ((sec.result_type === 'video' || sec.result_type === 'ketang') && Array.isArray(sec.data)) sec.data = cleanVideoList(sec.data, cleanKw);
                     if ((sec.result_type === 'bili_user' || sec.result_type === 'user') && Array.isArray(sec.data)) {
                         sec.data.forEach(u => u?.res?.forEach?.(item => recordItemVerdict(item, true)));
                     }
@@ -364,10 +364,10 @@
     function isCardIrrelevant(card, keyword) {
         if (card.closest('.user-list, [class*="user-"]')) return false;
 
-        const link = card.querySelector('a[href*="/video/"]');
+        const link = card.querySelector('a[href*="/video/"], a[href*="/cheese/play/"]') || card.querySelector('a');
         const href = link?.getAttribute?.('href') || link?.href || '';
         const bvid = href.match(/BV[a-zA-Z0-9]+/i)?.[0];
-        const aid = href.match(/\/video\/av(\d+)/i)?.[1];
+        const aid = href.match(/(?:\/video\/av|\/cheese\/play\/ss)(\d+)/i)?.[1];
 
         if (bvid && relevantBvids.has(bvid) || aid && relevantAids.has(aid)) return false;
         if (bvid && irrelevantBvids.has(bvid) || aid && irrelevantAids.has(aid)) return true;
@@ -399,7 +399,7 @@
         card.dataset.biliPurifyBound = '1';
         card.addEventListener('click', (e) => {
             if (!card.classList.contains('bili-purify-blurred') || e?.target?.closest('a')) return;
-            const a = card.querySelector('a[href*="/video/"]');
+            const a = card.querySelector('a[href*="/video/"], a[href*="/cheese/play/"]') || card.querySelector('a');
             if (a) typeof a.click === 'function' ? a.click() : window.open(a.getAttribute?.('href') || a.href, a.target || '_blank');
         });
     }
