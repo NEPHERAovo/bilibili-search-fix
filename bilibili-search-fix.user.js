@@ -2,7 +2,7 @@
 // @name         Bilibili Search Fix
 // @namespace    https://github.com/NEPHERAovo/bilibili-search-fix
 // @version      1.0.1
-// @description  强制B站搜索结果仅显示与关键词相关的视频！底层API拦截，零配置开箱即用，支持直接过滤与模糊展示双模式，支持强相关与弱关联双档强度�?
+// @description  强制B站搜索结果仅显示与关键词相关的视频！底层API拦截，零配置开箱即用，支持直接过滤与模糊展示双模式，支持强相关与弱关联双档强度。
 // @author       NEPHERAovo & Antigravity
 // @license      MIT
 // @match        *://search.bilibili.com/*
@@ -62,13 +62,13 @@
         const nextMode = curMode === MODE_FILTER ? MODE_BLUR : MODE_FILTER;
         const nextStrength = curStrength === STRENGTH_STRONG ? STRENGTH_WEAK : STRENGTH_STRONG;
         const switchMenu = (title, fn) => GM_registerMenuCommand(title, () => { fn(); typeof location !== 'undefined' && location.reload(); });
-        switchMenu(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展�? : '模糊展示 - 点击切换为直接过�?, () => {
+        switchMenu(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展示' : '模糊展示 - 点击切换为直接过滤', () => {
             setDisplayMode(nextMode);
-            if (typeof alert !== 'undefined') alert(`已切换为�?{nextMode === MODE_FILTER ? '直接过滤' : '模糊展示'}】模式`);
+            if (typeof alert !== 'undefined') alert(`已切换为【${nextMode === MODE_FILTER ? '直接过滤' : '模糊展示'}】模式`);
         });
-        switchMenu(curStrength === STRENGTH_STRONG ? '强关联（严格包含�?- 点击切换为弱关联' : '弱关联（包含相关标签�?- 点击切换为强关联', () => {
+        switchMenu(curStrength === STRENGTH_STRONG ? '强关联（严格包含） - 点击切换为弱关联' : '弱关联（包含相关标签） - 点击切换为强关联', () => {
             setFilterStrength(nextStrength);
-            if (typeof alert !== 'undefined') alert(`已切换为�?{nextStrength === STRENGTH_STRONG ? '强关联（严格包含�? : '弱关联（包含相关标签�?}】强度`);
+            if (typeof alert !== 'undefined') alert(`已切换为【${nextStrength === STRENGTH_STRONG ? '强关联（严格包含）' : '弱关联（包含相关标签）'}】强度`);
         });
     }
 
@@ -78,7 +78,7 @@
 
     function tokenizeSearchKeyword(keyword) {
         if (!keyword || typeof keyword !== 'string') return [];
-        const norm = keyword.replace(/[+_,�?\\|]+/g, ' '), tokenSet = new Set();
+        const norm = keyword.replace(/[+_,，/\\|]+/g, ' '), tokenSet = new Set();
         norm.split(/\s+/).forEach(t => { const tr = t.trim().toLowerCase(); if (tr) tokenSet.add(tr); });
         for (const seg of norm.match(/[\u4e00-\u9fa5]+|[a-z0-9]+/gi) || []) {
             const lower = seg.toLowerCase();
@@ -109,7 +109,7 @@
         if (!item) return [];
         const t1 = item.tag || '', t2 = Array.isArray(item.tags) ? item.tags.map(t => typeof t === 'string' ? t : (t.tag_name || t.name || '')).join(',') : (item.tags || '');
         const t3 = Array.isArray(item.new_rec_tags) ? item.new_rec_tags.map(t => t.tag_name || '').join(',') : '';
-        return `${t1},${t2},${t3}`.split(/[,，�?\\|;；\s+]+/).map(t => t.replace(/^[#＃@]+|[#＃@]+$/g, '').trim().toLowerCase()).filter(t => t.length >= 2);
+        return `${t1},${t2},${t3}`.split(/[,，、/\\|;；\s+]+/).map(t => t.replace(/^[#＃@]+|[#＃@]+$/g, '').trim().toLowerCase()).filter(t => t.length >= 2);
     }
 
     function isItemStronglyRelevant(item, searchKeyword) {
@@ -144,16 +144,16 @@
         if (hasOfficialKeywordHighlight(item)) return '官方高亮';
         if (Array.isArray(item.hit_columns) && item.hit_columns.length) return `官方命中[${item.hit_columns.join(',')}]`;
         const tokens = tokenizeSearchKeyword(searchKeyword);
-        const fields = [[stripHtml(item.title).toLowerCase(), '标题'], [stripHtml(item.tag).toLowerCase(), '标签'], [stripHtml(item.author || item.uname).toLowerCase(), '作�?], [stripHtml(item.description || item.desc).toLowerCase(), '简�?]];
+        const fields = [[stripHtml(item.title).toLowerCase(), '标题'], [stripHtml(item.tag).toLowerCase(), '标签'], [stripHtml(item.author || item.uname).toLowerCase(), '作者'], [stripHtml(item.description || item.desc).toLowerCase(), '简介']];
         for (const [val, label] of fields) for (const t of tokens) if (val.includes(t)) return `${label}命中[${t}]`;
         for (const it of extractItemTags(item)) for (const t of tokens) if (it.includes(t) || t.includes(it)) return `标签命中[${it}]`;
-        return '关键词相�?;
+        return '关键词相关';
     }
 
     function logBatchSummary(kept, filtered, source = 'Data') {
         const mode = getDisplayMode(), strength = getFilterStrength();
-        if (kept && kept.length) console.log(`[BiliSearchFix 放行汇总] 共放�?${kept.length} 条相关内�?[${source}] (强度:${strength})`, kept);
-        if (filtered && filtered.length) console.log(`[BiliSearchFix 过滤汇总] 共过�?${filtered.length} 条不相关内容 [${source}] (模式:${mode}, 强度:${strength})`, filtered);
+        if (kept && kept.length) console.log(`[BiliSearchFix 放行汇总] 共放行 ${kept.length} 条相关内容 [${source}] (强度:${strength})`, kept);
+        if (filtered && filtered.length) console.log(`[BiliSearchFix 过滤汇总] 共过滤 ${filtered.length} 条不相关内容 [${source}] (模式:${mode}, 强度:${strength})`, filtered);
     }
 
     function updateWeightedTagPool(videos, searchKeyword) {
@@ -209,16 +209,16 @@
                     if (found) matchedTag = `标题关联标签[${found}]`;
                 }
                 if (matchedTag) isRel = true;
-                else { isRel = false; reason = '弱关联模式下未匹配强相关标签�?; }
+                else { isRel = false; reason = '弱关联模式下未匹配强相关标签池'; }
             } else {
                 isRel = false;
-                reason = '强相关模式下未命中关键词或标�?;
+                reason = '强相关模式下未命中关键词或标签';
             }
 
             recordItemVerdict(item, isRel);
 
             const idKey = item.bvid || (item.aid ? String(item.aid) : stripHtml(item.title));
-            const itemTitle = stripHtml(item.title) || '[无标�?广告]';
+            const itemTitle = stripHtml(item.title) || '[无标题/广告]';
             const itemTags = item.tag || (Array.isArray(item.tags) ? item.tags.join(',') : '');
 
             if (isRel) {
@@ -368,7 +368,7 @@
         if (typeof document === 'undefined' || document.getElementById('bili-purify-css')) return;
         const style = document.createElement('style');
         style.id = 'bili-purify-css';
-        style.textContent = '.bili-purify-blurred{position:relative!important;cursor:pointer!important}.bili-purify-blurred>*{filter:blur(8px) grayscale(40%)!important;opacity:.35!important;transition:filter .2s ease,opacity .2s ease!important}.bili-purify-blurred:hover>*{filter:none!important;opacity:1!important}.bili-purify-blurred::after{content:"弱相关内�?;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.85);color:#fff;padding:6px 12px;border-radius:8px;font-size:13px;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .2s ease,visibility .2s ease!important}.bili-purify-blurred:hover::after{opacity:0!important;visibility:hidden!important}';
+        style.textContent = '.bili-purify-blurred{position:relative!important;cursor:pointer!important}.bili-purify-blurred>*{filter:blur(8px) grayscale(40%)!important;opacity:.35!important;transition:filter .2s ease,opacity .2s ease!important}.bili-purify-blurred:hover>*{filter:none!important;opacity:1!important}.bili-purify-blurred::after{content:"弱相关内容";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.85);color:#fff;padding:6px 12px;border-radius:8px;font-size:13px;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .2s ease,visibility .2s ease!important}.bili-purify-blurred:hover::after{opacity:0!important;visibility:hidden!important}';
         (document.head || document.documentElement).appendChild(style);
     }
 
