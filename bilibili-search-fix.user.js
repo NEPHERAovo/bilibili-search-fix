@@ -31,7 +31,7 @@
     const relevantTitleSet = new Set(), irrelevantTitleSet = new Set();
     const globalTagPool = new Map(), loggedBvids = new Set(), loggedKeptBvids = new Set();
     const tagStatsMap = new Map(), tagAnalyzedVideos = new Set();
-    const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐']);
+    const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐', 'vlog']);
     let currentActiveKeyword = '';
 
     function resetContextIfKeywordChanged(keyword) {
@@ -184,7 +184,7 @@
         });
         list.sort((a, b) => b.score - a.score);
         globalTagPool.clear();
-        list.slice(0, 25).forEach((item, idx) => globalTagPool.set(item.tag, { rank: idx + 1, score: item.score }));
+        list.slice(0, 20).forEach((item, idx) => globalTagPool.set(item.tag, { rank: idx + 1, score: item.score }));
     }
 
     function cleanVideoList(videos, searchKeyword) {
