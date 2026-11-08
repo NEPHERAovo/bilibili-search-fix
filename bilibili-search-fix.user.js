@@ -29,7 +29,7 @@
     const relevantBvids = new Set(), irrelevantBvids = new Set();
     const relevantAids = new Set(), irrelevantAids = new Set();
     const relevantTitleSet = new Set(), irrelevantTitleSet = new Set();
-    const globalTagPool = new Set(), loggedBvids = new Set(), loggedKeptBvids = new Set();
+    const globalTagPool = new Map(), loggedBvids = new Set(), loggedKeptBvids = new Set();
     const tagStatsMap = new Map(), tagAnalyzedVideos = new Set();
     const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐']);
     let currentActiveKeyword = '';
@@ -78,22 +78,20 @@
 
     function tokenizeSearchKeyword(keyword) {
         if (!keyword || typeof keyword !== 'string') return [];
-        const norm = keyword.replace(/[+_,，/\\|]+/g, ' '), tokenSet = new Set();
-        norm.split(/\s+/).forEach(t => { const tr = t.trim().toLowerCase(); if (tr) tokenSet.add(tr); });
+        const norm = keyword.replace(/[+_,，/\\|]+/g, ' ').toLowerCase(), tokenSet = new Set();
+        norm.split(/\s+/).forEach(t => t && tokenSet.add(t));
         for (const seg of norm.match(/[\u4e00-\u9fa5]+|[a-z0-9]+/gi) || []) {
-            const lower = seg.toLowerCase();
-            if (lower.length >= 2 || /^[a-z0-9]$/i.test(lower)) tokenSet.add(lower);
+            if (seg.length >= 2 || /^[a-z0-9]$/.test(seg)) tokenSet.add(seg);
             if (/[\u4e00-\u9fa5]/.test(seg)) {
                 if (seg.length >= 4) {
-                    const mid = Math.floor(seg.length / 2);
-                    tokenSet.add(seg.slice(0, mid)); tokenSet.add(seg.slice(mid));
+                    const m = Math.floor(seg.length / 2);
+                    tokenSet.add(seg.slice(0, m)); tokenSet.add(seg.slice(m));
                     for (let i = 0; i <= seg.length - 2; i += 2) tokenSet.add(seg.slice(i, i + 2));
                 } else if (seg.length === 3) {
                     tokenSet.add(seg.slice(0, 2)); tokenSet.add(seg.slice(1, 3));
                 }
             } else {
-                const sub = seg.match(/[a-z]+|\d+/gi);
-                if (sub && sub.length > 1) sub.forEach(s => { if (s.length >= 2) tokenSet.add(s.toLowerCase()); });
+                (seg.match(/[a-z]+|\d+/gi) || []).forEach(s => { if (s.length >= 2) tokenSet.add(s); });
             }
         }
         return Array.from(tokenSet);
@@ -140,7 +138,7 @@
     }
 
     function getMatchReason(item, searchKeyword, matchedTag) {
-        if (matchedTag) return `弱关联标签[${matchedTag}]`;
+        if (matchedTag) return matchedTag;
         if (hasOfficialKeywordHighlight(item)) return '官方高亮';
         if (Array.isArray(item.hit_columns) && item.hit_columns.length) return `官方命中[${item.hit_columns.join(',')}]`;
         const tokens = tokenizeSearchKeyword(searchKeyword);
@@ -152,6 +150,10 @@
 
     function logBatchSummary(kept, filtered, source = 'Data') {
         const mode = getDisplayMode(), strength = getFilterStrength();
+        if (strength === STRENGTH_WEAK && globalTagPool.size > 0) {
+            const preview = Array.from(globalTagPool.entries()).slice(0, 10).map(([t, info]) => `${t}(#${info.rank}, 权${info.score})`).join(', ');
+            console.log(`[BiliSearchFix 弱关联高权池] Top ${globalTagPool.size}: ${preview}`);
+        }
         if (kept && kept.length) console.log(`[BiliSearchFix 放行汇总] 共放行 ${kept.length} 条相关内容 [${source}] (强度:${strength})`, kept);
         if (filtered && filtered.length) console.log(`[BiliSearchFix 过滤汇总] 共过滤 ${filtered.length} 条不相关内容 [${source}] (模式:${mode}, 强度:${strength})`, filtered);
     }
@@ -168,8 +170,8 @@
             if (!tags.length) return;
             const discount = 1 / Math.sqrt(tags.length);
             tags.forEach(t => {
-                const s = tagStatsMap.get(t) || { df: 0, score: 0 };
-                s.df += 1; s.score += discount;
+                const s = tagStatsMap.get(t) || { score: 0 };
+                s.score += discount;
                 tagStatsMap.set(t, s);
             });
         });
@@ -178,11 +180,11 @@
         tagStatsMap.forEach((s, tag) => {
             const hasTok = tokens.some(tok => tag.includes(tok) || tok.includes(tag));
             const score = s.score + (hasTok ? 1 : 0);
-            if (hasTok || s.df >= 2 || s.score >= 0.4) list.push({ tag, score });
+            if (score >= 0.35) list.push({ tag, score: Math.round(score * 100) / 100 });
         });
         list.sort((a, b) => b.score - a.score);
         globalTagPool.clear();
-        list.slice(0, 35).forEach(c => globalTagPool.add(c.tag));
+        list.slice(0, 25).forEach((item, idx) => globalTagPool.set(item.tag, { rank: idx + 1, score: item.score }));
     }
 
     function cleanVideoList(videos, searchKeyword) {
@@ -202,17 +204,29 @@
                 isRel = true;
             } else if (currentStrength === STRENGTH_WEAK) {
                 const itemTags = extractItemTags(item);
-                matchedTag = itemTags.find(t => globalTagPool.has(t)) || '';
-                if (!matchedTag) {
+                const hit = itemTags.find(t => globalTagPool.has(t));
+                if (hit) {
+                    const info = globalTagPool.get(hit);
+                    matchedTag = `弱关联标签[${hit}] (排名#${info.rank}, 权重${info.score})`;
+                    isRel = true;
+                } else {
                     const cleanTitle = stripHtml(item.title).toLowerCase();
-                    const found = Array.from(globalTagPool).find(t => t.length >= 2 && cleanTitle.includes(t));
-                    if (found) matchedTag = `标题关联标签[${found}]`;
+                    const found = Array.from(globalTagPool.keys()).find(t => t.length >= 2 && cleanTitle.includes(t));
+                    if (found) {
+                        const info = globalTagPool.get(found);
+                        matchedTag = `弱关联标题命中[${found}] (排名#${info.rank}, 权重${info.score})`;
+                        isRel = true;
+                    } else {
+                        isRel = false;
+                        const tagStr = itemTags.slice(0, 5).join(',');
+                        reason = tagStr
+                            ? `弱关联未命中：视频标签[${tagStr}]未进入高权池(Top${globalTagPool.size})`
+                            : `弱关联未命中：无有效标签且标题未命中高权词(Top${globalTagPool.size})`;
+                    }
                 }
-                if (matchedTag) isRel = true;
-                else { isRel = false; reason = '弱关联模式下未匹配强相关标签池'; }
             } else {
                 isRel = false;
-                reason = '强相关模式下未命中关键词或标签';
+                reason = `强相关未命中：标题与标签均未包含关键词[${searchKeyword}]`;
             }
 
             recordItemVerdict(item, isRel);
@@ -256,15 +270,11 @@
         if (Array.isArray(container.result)) {
             const isSectionList = container.result.some(r => r && (r.result_type || Array.isArray(r.data)));
             if (isSectionList) {
-                container.result = container.result.filter(section => {
-                    if (!section || section.result_type === 'brand_ad' || section.result_type === 'tips') return false;
-                    if (section.result_type === 'video' && Array.isArray(section.data)) {
-                        section.data = cleanVideoList(section.data, searchKeyword);
-                    }
-                    if ((section.result_type === 'bili_user' || section.result_type === 'user') && Array.isArray(section.data)) {
-                        section.data.forEach(u => {
-                            if (u && Array.isArray(u.res)) u.res.forEach(item => recordItemVerdict(item, true));
-                        });
+                container.result = container.result.filter(sec => {
+                    if (!sec || sec.result_type === 'brand_ad' || sec.result_type === 'tips') return false;
+                    if (sec.result_type === 'video' && Array.isArray(sec.data)) sec.data = cleanVideoList(sec.data, searchKeyword);
+                    if ((sec.result_type === 'bili_user' || sec.result_type === 'user') && Array.isArray(sec.data)) {
+                        sec.data.forEach(u => u?.res?.forEach?.(item => recordItemVerdict(item, true)));
                     }
                     return true;
                 });
@@ -280,8 +290,7 @@
             const kw = new URLSearchParams(pageContext.location.search).get('keyword');
             if (kw) return decodeURIComponent(kw).trim();
         } catch (e) {}
-        const el = document.querySelector('input.search-input-el, .nav-search-input, input[type="search"]');
-        return el && el.value ? el.value.trim() : '';
+        return document.querySelector('input.search-input-el, .nav-search-input, input[type="search"]')?.value?.trim() || '';
     }
 
     function extractKeywordFromUrl(url) {
@@ -292,27 +301,20 @@
         return getPageSearchKeyword();
     }
 
-    const isSearchApiUrl = (url) => typeof url === 'string' && (
-        url.includes('/search/all') ||
-        url.includes('/search/type') ||
-        url.includes('/x/web-interface/wbi/search/') ||
-        url.includes('/x/web-interface/search/')
-    );
+    const isSearchApiUrl = (url) => typeof url === 'string' && (url.includes('/search/all') || url.includes('/search/type') || url.includes('/wbi/search/'));
 
     function installFetchHook() {
         const originalFetch = pageContext.fetch;
         if (typeof originalFetch !== 'function') return;
 
         pageContext.fetch = async function(...args) {
-            const requestUrl = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : '');
+            const requestUrl = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
             if (!isSearchApiUrl(requestUrl)) return originalFetch.apply(this, args);
 
             const response = await originalFetch.apply(this, args);
             try {
-                const cloned = response.clone();
-                const json = await cloned.json();
-                const keyword = extractKeywordFromUrl(requestUrl);
-                const cleanedJson = cleanSearchDataPayload(json, keyword);
+                const json = await response.clone().json();
+                const cleanedJson = cleanSearchDataPayload(json, extractKeywordFromUrl(requestUrl));
                 return new Response(JSON.stringify(cleanedJson), {
                     status: response.status,
                     statusText: response.statusText,
@@ -325,30 +327,25 @@
     }
 
     function installXhrHook() {
-        if (!pageContext.XMLHttpRequest || !pageContext.XMLHttpRequest.prototype) return;
-        const originalOpen = pageContext.XMLHttpRequest.prototype.open;
-        const originalSend = pageContext.XMLHttpRequest.prototype.send;
+        const proto = pageContext.XMLHttpRequest?.prototype;
+        if (!proto) return;
+        const origOpen = proto.open, origSend = proto.send;
 
-        pageContext.XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            this._bp_url = url;
-            return originalOpen.apply(this, [method, url, ...rest]);
-        };
-
-        pageContext.XMLHttpRequest.prototype.send = function(...args) {
+        proto.open = function(m, url, ...rest) { this._bp_url = url; return origOpen.apply(this, [m, url, ...rest]); };
+        proto.send = function(...args) {
             if (isSearchApiUrl(this._bp_url)) {
-                const keyword = extractKeywordFromUrl(this._bp_url);
+                const kw = extractKeywordFromUrl(this._bp_url);
                 this.addEventListener('readystatechange', function() {
                     if (this.readyState === 4 && this.status === 200) {
                         try {
-                            const parsed = JSON.parse(this.responseText);
-                            const cleaned = cleanSearchDataPayload(parsed, keyword);
+                            const cleaned = cleanSearchDataPayload(JSON.parse(this.responseText), kw);
                             Object.defineProperty(this, 'responseText', { value: JSON.stringify(cleaned) });
                             Object.defineProperty(this, 'response', { value: cleaned });
                         } catch (e) {}
                     }
                 });
             }
-            return originalSend.apply(this, args);
+            return origSend.apply(this, args);
         };
     }
 
@@ -400,7 +397,7 @@
         if (keyword && (titleText || authorText)) {
             if (isItemStronglyRelevant({ type: 'video', title: rawTitle || titleText, author: authorText }, keyword)) return false;
             if (getFilterStrength() === STRENGTH_WEAK) {
-                for (const tag of globalTagPool) if (tag.length >= 2 && titleText.includes(tag)) return false;
+                for (const [tag] of globalTagPool) if (tag.length >= 2 && titleText.includes(tag)) return false;
             }
             return true;
         }
