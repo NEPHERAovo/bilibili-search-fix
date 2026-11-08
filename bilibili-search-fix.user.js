@@ -110,7 +110,7 @@
     }
 
     function isItemStronglyRelevant(item, searchKeyword) {
-        if (!item || (item.type && item.type !== 'video' && item.type !== 'ketang')) return false;
+        if (!item) return false;
         const cleanKw = searchKeyword.trim().toLowerCase();
         const tokens = tokenizeSearchKeyword(cleanKw);
         if (hasOfficialKeywordHighlight(item, tokens) || (Array.isArray(item.hit_columns) && item.hit_columns.length > 0)) return true;
@@ -398,9 +398,8 @@
         if (card.dataset.biliPurifyBound) return;
         card.dataset.biliPurifyBound = '1';
         card.addEventListener('click', (e) => {
-            if (!card.classList.contains('bili-purify-blurred') || e?.target?.closest('a')) return;
-            const a = card.querySelector('a[href*="/video/"], a[href*="/cheese/play/"]') || card.querySelector('a');
-            if (a) typeof a.click === 'function' ? a.click() : window.open(a.getAttribute?.('href') || a.href, a.target || '_blank');
+            if (e?.target?.closest('a')) return;
+            card.querySelector('a')?.click();
         });
     }
 
