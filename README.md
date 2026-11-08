@@ -3,7 +3,7 @@
 B站搜索结果纯净修复：精准保留与搜索词相关的内容，告别算法杂乱推流与信息流广告。
 
 [![Install](https://img.shields.io/badge/Install-Tampermonkey-brightgreen?style=flat-square&logo=tampermonkey)](https://raw.githubusercontent.com/NEPHERAovo/bilibili-search-fix/main/bilibili-search-fix.user.js)
-[![Version](https://img.shields.io/badge/version-1.0.1-blue?style=flat-square)](https://raw.githubusercontent.com/NEPHERAovo/bilibili-search-fix/main/bilibili-search-fix.user.js)
+[![Version](https://img.shields.io/badge/version-1.0.2-blue?style=flat-square)](https://raw.githubusercontent.com/NEPHERAovo/bilibili-search-fix/main/bilibili-search-fix.user.js)
 
 > **声明与致谢**：本项目原始灵感来源于 [houliabc/bilibili-search-purify](https://github.com/houliabc/bilibili-search-purify)。新版本未采用其代码实现，而是基于现代 B 站底层 API 请求拦截（Fetch / XHR / SSR / Pinia 水合拦截）、确定性标签关联池与无侵入 DOM 协同重构开发，实现了更高精准度、零闪烁与零误杀的纯净检索效果。
 
@@ -61,8 +61,9 @@ B站搜索结果纯净修复：精准保留与搜索词相关的内容，告别�
 - **展示模式**：
   - `模糊展示 - 点击切换为直接过滤`（当前默认：模糊展示）
   - `直接过滤 - 点击切换为模糊展示`
-- **过滤强度**：
-  - `弱关联（包含相关标签） - 点击切换为强关联`（当前默认：弱关联）
+- **过滤强度与标签池数量**：
+  - `弱关联（包含20相关标签） - 点击切换为强关联`（当前默认：弱关联）
+  - 弱关联模式下联动提供 3 个子菜单，支持自由调整扩展标签数量（`5` / `10` / `15` / `20`，默认 20，已选不展示，强关联时不展示）
   - `强关联（严格包含） - 点击切换为弱关联`
 
 ---

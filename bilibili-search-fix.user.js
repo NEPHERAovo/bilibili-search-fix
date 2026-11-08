@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili Search Fix
 // @namespace    https://github.com/NEPHERAovo/bilibili-search-fix
-// @version      1.0.1
+// @version      1.0.2
 // @description  强制B站搜索结果仅显示与关键词相关的视频！底层API拦截，零配置开箱即用，支持直接过滤与模糊展示双模式，支持强相关与弱关联双档强度。
 // @author       NEPHERAovo & Antigravity
 // @license      MIT
@@ -22,6 +22,7 @@
 
     const STORAGE_MODE_KEY = 'bili_purify_display_mode';
     const STORAGE_STRENGTH_KEY = 'bili_purify_filter_strength';
+    const STORAGE_TAG_LIMIT_KEY = 'bili_purify_tag_limit';
 
     const MODE_FILTER = 'filter', MODE_BLUR = 'blur';
     const STRENGTH_STRONG = 'strong', STRENGTH_WEAK = 'weak';
@@ -31,7 +32,7 @@
     const relevantTitleSet = new Set(), irrelevantTitleSet = new Set();
     const globalTagPool = new Map(), loggedBvids = new Set(), loggedKeptBvids = new Set();
     const tagStatsMap = new Map(), tagAnalyzedVideos = new Set();
-    const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐', 'vlog']);
+    const GENERIC_TAGS = new Set(['游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐', 'vlog']);
     let currentActiveKeyword = '';
 
     function resetContextIfKeywordChanged(keyword) {
@@ -55,21 +56,26 @@
     const setDisplayMode = (m) => setStorage(STORAGE_MODE_KEY, m);
     const getFilterStrength = () => getStorage(STORAGE_STRENGTH_KEY, STRENGTH_WEAK);
     const setFilterStrength = (s) => setStorage(STORAGE_STRENGTH_KEY, s);
+    const getWeakTagLimit = () => {
+        const v = parseInt(getStorage(STORAGE_TAG_LIMIT_KEY, 20), 10);
+        return [5, 10, 15, 20].includes(v) ? v : 20;
+    };
+    const setWeakTagLimit = (n) => setStorage(STORAGE_TAG_LIMIT_KEY, n);
 
     function registerTampermonkeyMenu() {
         if (typeof GM_registerMenuCommand === 'undefined') return;
-        const curMode = getDisplayMode(), curStrength = getFilterStrength();
+        const curMode = getDisplayMode(), curStrength = getFilterStrength(), curLimit = getWeakTagLimit();
         const nextMode = curMode === MODE_FILTER ? MODE_BLUR : MODE_FILTER;
         const nextStrength = curStrength === STRENGTH_STRONG ? STRENGTH_WEAK : STRENGTH_STRONG;
         const switchMenu = (title, fn) => GM_registerMenuCommand(title, () => { fn(); typeof location !== 'undefined' && location.reload(); });
-        switchMenu(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展示' : '模糊展示 - 点击切换为直接过滤', () => {
-            setDisplayMode(nextMode);
-            if (typeof alert !== 'undefined') alert(`已切换为【${nextMode === MODE_FILTER ? '直接过滤' : '模糊展示'}】模式`);
-        });
-        switchMenu(curStrength === STRENGTH_STRONG ? '强关联（严格包含） - 点击切换为弱关联' : '弱关联（包含相关标签） - 点击切换为强关联', () => {
-            setFilterStrength(nextStrength);
-            if (typeof alert !== 'undefined') alert(`已切换为【${nextStrength === STRENGTH_STRONG ? '强关联（严格包含）' : '弱关联（包含相关标签）'}】强度`);
-        });
+        switchMenu(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展示' : '模糊展示 - 点击切换为直接过滤', () => setDisplayMode(nextMode));
+        const strengthLabel = curStrength === STRENGTH_STRONG ? '强关联（严格包含） - 点击切换为弱关联' : `弱关联（包含${curLimit}相关标签） - 点击切换为强关联`;
+        switchMenu(strengthLabel, () => setFilterStrength(nextStrength));
+        if (curStrength === STRENGTH_WEAK) {
+            [5, 10, 15, 20].filter(n => n !== curLimit).forEach(n => {
+                switchMenu(`包含 ${n} 相关标签`, () => setWeakTagLimit(n));
+            });
+        }
     }
 
     function stripHtml(html) {
@@ -98,9 +104,7 @@
     }
 
     function hasOfficialKeywordHighlight(item) {
-        if (!item) return false;
-        const rawTitle = item.title || '', rawDesc = item.description || item.desc || '';
-        return /<em\s+class=["']keyword["']>.*?<\/em>/i.test(rawTitle) || /<em\s+class=["']keyword["']>.*?<\/em>/i.test(rawDesc);
+        return item ? /<em\s+class=["']keyword["']>.*?<\/em>/i.test((item.title || '') + (item.description || item.desc || '')) : false;
     }
 
     function extractItemTags(item) {
@@ -161,6 +165,7 @@
     function updateWeightedTagPool(videos, searchKeyword) {
         if (!Array.isArray(videos)) return;
         const tokens = tokenizeSearchKeyword(searchKeyword);
+        const cleanKw = (searchKeyword || '').toLowerCase();
         videos.forEach(item => {
             if (!item || !isItemStronglyRelevant(item, searchKeyword)) return;
             const vid = item.bvid || (item.aid ? String(item.aid) : stripHtml(item.title));
@@ -178,13 +183,13 @@
 
         const list = [];
         tagStatsMap.forEach((s, tag) => {
-            const hasTok = tokens.some(tok => tag.includes(tok) || tok.includes(tag));
-            const score = s.score + (hasTok ? 1 : 0);
-            if (score >= 0.35) list.push({ tag, score: Math.round(score * 100) / 100 });
+            const isKeywordTag = cleanKw.includes(tag) || tokens.some(tok => tag.includes(tok) || tok.includes(tag));
+            if (isKeywordTag) return;
+            if (s.score >= 0.35) list.push({ tag, score: Math.round(s.score * 100) / 100 });
         });
         list.sort((a, b) => b.score - a.score);
         globalTagPool.clear();
-        list.slice(0, 20).forEach((item, idx) => globalTagPool.set(item.tag, { rank: idx + 1, score: item.score }));
+        list.slice(0, getWeakTagLimit()).forEach((item, idx) => globalTagPool.set(item.tag, { rank: idx + 1, score: item.score }));
     }
 
     function cleanVideoList(videos, searchKeyword) {
@@ -257,32 +262,25 @@
         return kept;
     }
 
-    function cleanSearchDataPayload(container, searchKeyword) {
-        if (!container || typeof container !== 'object') return container;
-        resetContextIfKeywordChanged(searchKeyword);
-        if (container.data && typeof container.data === 'object') {
-            cleanSearchDataPayload(container.data, searchKeyword);
-            return container;
-        }
-        if (container.searchResponse?.searchAllResponse) cleanSearchDataPayload(container.searchResponse.searchAllResponse, searchKeyword);
-        if (container.searchTypeResponse?.searchTypeResponse) cleanSearchDataPayload(container.searchTypeResponse.searchTypeResponse, searchKeyword);
-
-        if (Array.isArray(container.result)) {
-            const isSectionList = container.result.some(r => r && (r.result_type || Array.isArray(r.data)));
-            if (isSectionList) {
-                container.result = container.result.filter(sec => {
+    function cleanSearchDataPayload(c, kw) {
+        if (!c || typeof c !== 'object') return c;
+        resetContextIfKeywordChanged(kw);
+        if (c.data && typeof c.data === 'object') return cleanSearchDataPayload(c.data, kw), c;
+        if (c.searchResponse?.searchAllResponse) cleanSearchDataPayload(c.searchResponse.searchAllResponse, kw);
+        if (c.searchTypeResponse?.searchTypeResponse) cleanSearchDataPayload(c.searchTypeResponse.searchTypeResponse, kw);
+        if (Array.isArray(c.result)) {
+            c.result = c.result.some(r => r && (r.result_type || Array.isArray(r.data)))
+                ? c.result.filter(sec => {
                     if (!sec || sec.result_type === 'brand_ad' || sec.result_type === 'tips') return false;
-                    if (sec.result_type === 'video' && Array.isArray(sec.data)) sec.data = cleanVideoList(sec.data, searchKeyword);
+                    if (sec.result_type === 'video' && Array.isArray(sec.data)) sec.data = cleanVideoList(sec.data, kw);
                     if ((sec.result_type === 'bili_user' || sec.result_type === 'user') && Array.isArray(sec.data)) {
                         sec.data.forEach(u => u?.res?.forEach?.(item => recordItemVerdict(item, true)));
                     }
                     return true;
-                });
-            } else {
-                container.result = cleanVideoList(container.result, searchKeyword);
-            }
+                })
+                : cleanVideoList(c.result, kw);
         }
-        return container;
+        return c;
     }
 
     function getPageSearchKeyword() {
@@ -377,10 +375,8 @@
         const bvid = href.match(/BV[a-zA-Z0-9]+/i)?.[0];
         const aid = href.match(/\/video\/av(\d+)/i)?.[1];
 
-        if (bvid && relevantBvids.has(bvid)) return false;
-        if (bvid && irrelevantBvids.has(bvid)) return true;
-        if (aid && relevantAids.has(aid)) return false;
-        if (aid && irrelevantAids.has(aid)) return true;
+        if (bvid && relevantBvids.has(bvid) || aid && relevantAids.has(aid)) return false;
+        if (bvid && irrelevantBvids.has(bvid) || aid && irrelevantAids.has(aid)) return true;
 
         const titleEl = card.querySelector('.bili-video-card__info--tit, h3');
         const rawTitle = titleEl ? titleEl.innerHTML : '';
