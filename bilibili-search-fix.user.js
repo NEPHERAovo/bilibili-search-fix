@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili Search Fix
 // @namespace    https://github.com/NEPHERAovo/bilibili-search-fix
-// @version      1.0.0
+// @version      1.0.1
 // @description  强制B站搜索结果仅显示与关键词相关的视频！底层API拦截，零配置开箱即用，支持直接过滤与模糊展示双模式，支持强相关与弱关联双档强度。
 // @author       NEPHERAovo & Antigravity
 // @license      MIT
@@ -30,37 +30,26 @@
     const relevantAids = new Set(), irrelevantAids = new Set();
     const relevantTitleSet = new Set(), irrelevantTitleSet = new Set();
     const globalTagPool = new Set(), loggedBvids = new Set(), loggedKeptBvids = new Set();
+    const tagStatsMap = new Map(), tagAnalyzedVideos = new Set();
+    const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐']);
     let currentActiveKeyword = '';
 
     function resetContextIfKeywordChanged(keyword) {
         if (!keyword || typeof keyword !== 'string') return;
         const normalized = keyword.trim().toLowerCase();
         if (currentActiveKeyword && currentActiveKeyword !== normalized) {
-            relevantBvids.clear(); irrelevantBvids.clear();
-            relevantAids.clear(); irrelevantAids.clear();
-            relevantTitleSet.clear(); irrelevantTitleSet.clear();
-            globalTagPool.clear(); loggedBvids.clear(); loggedKeptBvids.clear();
+            [relevantBvids, irrelevantBvids, relevantAids, irrelevantAids, relevantTitleSet, irrelevantTitleSet, globalTagPool, loggedBvids, loggedKeptBvids, tagAnalyzedVideos].forEach(s => s.clear());
+            tagStatsMap.clear();
         }
         currentActiveKeyword = normalized;
     }
 
-    function getStorage(k, def) {
-        try {
-            if (typeof GM_getValue !== 'undefined') {
-                const v = GM_getValue(k, def);
-                return v != null ? v : def;
-            }
-            if (typeof localStorage !== 'undefined') return localStorage.getItem(k) || def;
-        } catch (e) {}
-        return def;
-    }
-
-    function setStorage(k, v) {
-        try {
-            if (typeof GM_setValue !== 'undefined') GM_setValue(k, v);
-            else if (typeof localStorage !== 'undefined') localStorage.setItem(k, v);
-        } catch (e) {}
-    }
+    const getStorage = (k, def) => {
+        try { return typeof GM_getValue !== 'undefined' ? (GM_getValue(k, def) ?? def) : (typeof localStorage !== 'undefined' ? (localStorage.getItem(k) || def) : def); } catch (e) { return def; }
+    };
+    const setStorage = (k, v) => {
+        try { if (typeof GM_setValue !== 'undefined') GM_setValue(k, v); else if (typeof localStorage !== 'undefined') localStorage.setItem(k, v); } catch (e) {}
+    };
 
     const getDisplayMode = () => getStorage(STORAGE_MODE_KEY, MODE_BLUR);
     const setDisplayMode = (m) => setStorage(STORAGE_MODE_KEY, m);
@@ -72,15 +61,14 @@
         const curMode = getDisplayMode(), curStrength = getFilterStrength();
         const nextMode = curMode === MODE_FILTER ? MODE_BLUR : MODE_FILTER;
         const nextStrength = curStrength === STRENGTH_STRONG ? STRENGTH_WEAK : STRENGTH_STRONG;
-        GM_registerMenuCommand(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展示' : '模糊展示 - 点击切换为直接过滤', () => {
+        const switchMenu = (title, fn) => GM_registerMenuCommand(title, () => { fn(); typeof location !== 'undefined' && location.reload(); });
+        switchMenu(curMode === MODE_FILTER ? '直接过滤 - 点击切换为模糊展示' : '模糊展示 - 点击切换为直接过滤', () => {
             setDisplayMode(nextMode);
             if (typeof alert !== 'undefined') alert(`已切换为【${nextMode === MODE_FILTER ? '直接过滤' : '模糊展示'}】模式`);
-            if (typeof location !== 'undefined') location.reload();
         });
-        GM_registerMenuCommand(curStrength === STRENGTH_STRONG ? '强关联（严格包含） - 点击切换为弱关联' : '弱关联（包含相关标签） - 点击切换为强关联', () => {
+        switchMenu(curStrength === STRENGTH_STRONG ? '强关联（严格包含） - 点击切换为弱关联' : '弱关联（包含相关标签） - 点击切换为强关联', () => {
             setFilterStrength(nextStrength);
             if (typeof alert !== 'undefined') alert(`已切换为【${nextStrength === STRENGTH_STRONG ? '强关联（严格包含）' : '弱关联（包含相关标签）'}】强度`);
-            if (typeof location !== 'undefined') location.reload();
         });
     }
 
@@ -119,15 +107,9 @@
 
     function extractItemTags(item) {
         if (!item) return [];
-        const rawTag = item.tag || '';
-        const rawTags = Array.isArray(item.tags)
-            ? item.tags.map(t => typeof t === 'string' ? t : (t.tag_name || t.name || '')).join(',')
-            : (typeof item.tags === 'string' ? item.tags : '');
-        const rawRec = Array.isArray(item.new_rec_tags) ? item.new_rec_tags.map(t => t.tag_name || '').join(',') : '';
-        return `${rawTag},${rawTags},${rawRec}`
-            .split(/[,，、/\\|;；\s+]+/)
-            .map(t => t.replace(/^[#＃@]+|[#＃@]+$/g, '').trim().toLowerCase())
-            .filter(t => t.length >= 2);
+        const t1 = item.tag || '', t2 = Array.isArray(item.tags) ? item.tags.map(t => typeof t === 'string' ? t : (t.tag_name || t.name || '')).join(',') : (item.tags || '');
+        const t3 = Array.isArray(item.new_rec_tags) ? item.new_rec_tags.map(t => t.tag_name || '').join(',') : '';
+        return `${t1},${t2},${t3}`.split(/[,，、/\\|;；\s+]+/).map(t => t.replace(/^[#＃@]+|[#＃@]+$/g, '').trim().toLowerCase()).filter(t => t.length >= 2);
     }
 
     function isItemStronglyRelevant(item, searchKeyword) {
@@ -148,23 +130,11 @@
         );
     }
 
-    function isItemWeaklyRelevant(item, searchKeyword, tagPool) {
-        if (isItemStronglyRelevant(item, searchKeyword)) return true;
-        if (!item || (item.type && item.type !== 'video')) return false;
-
-        const pool = tagPool || globalTagPool;
-        if (!pool || pool.size === 0) return false;
-
-        const itemTags = extractItemTags(item);
-        return itemTags.some(tag => pool.has(tag));
-    }
 
     function recordItemVerdict(item, isRelevant) {
         if (item.bvid) (isRelevant ? relevantBvids : irrelevantBvids).add(item.bvid);
-        if (item.aid || item.id) {
-            const idStr = String(item.aid || item.id);
-            (isRelevant ? relevantAids : irrelevantAids).add(idStr);
-        }
+        const id = item.aid || item.id;
+        if (id) (isRelevant ? relevantAids : irrelevantAids).add(String(id));
         const clean = stripHtml(item.title).toLowerCase();
         if (clean) (isRelevant ? relevantTitleSet : irrelevantTitleSet).add(clean);
     }
@@ -174,17 +144,9 @@
         if (hasOfficialKeywordHighlight(item)) return '官方高亮';
         if (Array.isArray(item.hit_columns) && item.hit_columns.length) return `官方命中[${item.hit_columns.join(',')}]`;
         const tokens = tokenizeSearchKeyword(searchKeyword);
-        const title = stripHtml(item.title).toLowerCase(), tag = stripHtml(item.tag).toLowerCase();
-        const author = stripHtml(item.author || item.uname).toLowerCase(), desc = stripHtml(item.description || item.desc).toLowerCase();
-        for (const t of tokens) {
-            if (title.includes(t)) return `标题命中[${t}]`;
-            if (tag.includes(t)) return `标签命中[${t}]`;
-            if (author.includes(t)) return `作者命中[${t}]`;
-            if (desc.includes(t)) return `简介命中[${t}]`;
-        }
-        for (const it of extractItemTags(item)) {
-            for (const t of tokens) if (it.includes(t) || t.includes(it)) return `标签命中[${it}]`;
-        }
+        const fields = [[stripHtml(item.title).toLowerCase(), '标题'], [stripHtml(item.tag).toLowerCase(), '标签'], [stripHtml(item.author || item.uname).toLowerCase(), '作者'], [stripHtml(item.description || item.desc).toLowerCase(), '简介']];
+        for (const [val, label] of fields) for (const t of tokens) if (val.includes(t)) return `${label}命中[${t}]`;
+        for (const it of extractItemTags(item)) for (const t of tokens) if (it.includes(t) || t.includes(it)) return `标签命中[${it}]`;
         return '关键词相关';
     }
 
@@ -194,20 +156,40 @@
         if (filtered && filtered.length) console.log(`[BiliSearchFix 过滤汇总] 共过滤 ${filtered.length} 条不相关内容 [${source}] (模式:${mode}, 强度:${strength})`, filtered);
     }
 
+    function updateWeightedTagPool(videos, searchKeyword) {
+        if (!Array.isArray(videos)) return;
+        const tokens = tokenizeSearchKeyword(searchKeyword);
+        videos.forEach(item => {
+            if (!item || !isItemStronglyRelevant(item, searchKeyword)) return;
+            const vid = item.bvid || (item.aid ? String(item.aid) : stripHtml(item.title));
+            if (vid && tagAnalyzedVideos.has(vid)) return;
+            if (vid) tagAnalyzedVideos.add(vid);
+            const tags = Array.from(new Set(extractItemTags(item))).filter(t => !GENERIC_TAGS.has(t));
+            if (!tags.length) return;
+            const discount = 1 / Math.sqrt(tags.length);
+            tags.forEach(t => {
+                const s = tagStatsMap.get(t) || { df: 0, score: 0 };
+                s.df += 1; s.score += discount;
+                tagStatsMap.set(t, s);
+            });
+        });
+
+        const list = [];
+        tagStatsMap.forEach((s, tag) => {
+            const hasTok = tokens.some(tok => tag.includes(tok) || tok.includes(tag));
+            const score = s.score + (hasTok ? 1 : 0);
+            if (hasTok || s.df >= 2 || s.score >= 0.4) list.push({ tag, score });
+        });
+        list.sort((a, b) => b.score - a.score);
+        globalTagPool.clear();
+        list.slice(0, 35).forEach(c => globalTagPool.add(c.tag));
+    }
+
     function cleanVideoList(videos, searchKeyword) {
         if (!Array.isArray(videos)) return videos;
 
         const currentMode = getDisplayMode(), currentStrength = getFilterStrength();
-
-        const GENERIC_TAGS = new Set(['游戏', '单机游戏', '网络游戏', '手机游戏', '娱乐', '搞笑', '日常', '生活', '二创', '自制', '搬运', '视频', '原创', '新人', '推荐']);
-
-        videos.forEach(item => {
-            if (item && isItemStronglyRelevant(item, searchKeyword)) {
-                extractItemTags(item).forEach(t => {
-                    if (t.length >= 2 && !GENERIC_TAGS.has(t)) globalTagPool.add(t);
-                });
-            }
-        });
+        updateWeightedTagPool(videos, searchKeyword);
 
         const kept = [], filteredBatch = [], keptBatch = [];
 
@@ -386,21 +368,17 @@
         if (typeof document === 'undefined' || document.getElementById('bili-purify-css')) return;
         const style = document.createElement('style');
         style.id = 'bili-purify-css';
-        style.textContent = '.bili-purify-blurred{position:relative!important;cursor:pointer!important;user-select:none!important}.bili-purify-blurred:not(.bili-purify-unblurred)>*{filter:blur(8px) grayscale(40%)!important;opacity:.35!important;transition:filter .25s ease,opacity .25s ease!important;pointer-events:none!important}.bili-purify-blurred:not(.bili-purify-unblurred):hover>*{filter:blur(4px) grayscale(20%)!important;opacity:.6!important}.bili-purify-blurred.bili-purify-unblurred>*{filter:none!important;opacity:1!important;pointer-events:auto!important}.bili-purify-blurred:not(.bili-purify-unblurred)::after{content:"弱相关内容";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.85);color:#fff;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:500;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.2)}';
+        style.textContent = '.bili-purify-blurred{position:relative!important;cursor:pointer!important}.bili-purify-blurred>*{filter:blur(8px) grayscale(40%)!important;opacity:.35!important;transition:filter .2s ease,opacity .2s ease!important}.bili-purify-blurred:hover>*{filter:none!important;opacity:1!important}.bili-purify-blurred::after{content:"弱相关内容";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.85);color:#fff;padding:6px 12px;border-radius:8px;font-size:13px;pointer-events:none;z-index:100;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,.4);transition:opacity .2s ease,visibility .2s ease!important}.bili-purify-blurred:hover::after{opacity:0!important;visibility:hidden!important}';
         (document.head || document.documentElement).appendChild(style);
     }
 
     function isCardIrrelevant(card, keyword) {
-        if (card.closest('.b-user-video-card, .user-video-info, .user-list, .search-user-card, [class*="user-card"], [class*="user-video"], .user-info')) {
-            return false;
-        }
+        if (card.closest('.b-user-video-card, .user-video-info, .user-list, .search-user-card, [class*="user-card"], [class*="user-video"], .user-info')) return false;
 
         const link = card.querySelector('a[href*="/video/"]');
-        const href = link ? (link.getAttribute('href') || '') : '';
-        const bvidMatch = href.match(/BV[a-zA-Z0-9]+/i);
-        const bvid = bvidMatch ? bvidMatch[0] : '';
-        const aidMatch = href.match(/\/video\/av(\d+)/i);
-        const aid = aidMatch ? aidMatch[1] : '';
+        const href = link?.getAttribute?.('href') || link?.href || '';
+        const bvid = href.match(/BV[a-zA-Z0-9]+/i)?.[0];
+        const aid = href.match(/\/video\/av(\d+)/i)?.[1];
 
         if (bvid && relevantBvids.has(bvid)) return false;
         if (bvid && irrelevantBvids.has(bvid)) return true;
@@ -409,67 +387,55 @@
 
         const titleEl = card.querySelector('.bili-video-card__info--tit, h3');
         const rawTitle = titleEl ? titleEl.innerHTML : '';
-        const titleText = titleEl ? (titleEl.getAttribute('title') || titleEl.innerText || '').trim().toLowerCase() : '';
+        const titleText = (titleEl?.getAttribute?.('title') || titleEl?.innerText || '').trim().toLowerCase();
 
         if (titleText && relevantTitleSet.has(titleText)) return false;
         if (titleText && irrelevantTitleSet.has(titleText)) return true;
 
-        if (/<em\s+class=["']keyword["']>.*?<\/em>/i.test(rawTitle) || /<em\s+class=["']keyword["']>.*?<\/em>/i.test(card.innerHTML)) {
-            return false;
-        }
+        if (/<em\s+class=["']keyword["']>.*?<\/em>/i.test(rawTitle) || /<em\s+class=["']keyword["']>.*?<\/em>/i.test(card.innerHTML)) return false;
 
         const authorEl = card.querySelector('.bili-video-card__info--author, .bili-video-card__author');
-        const authorText = authorEl ? (authorEl.innerText || '').trim() : '';
+        const authorText = (authorEl?.innerText || '').trim();
 
         if (keyword && (titleText || authorText)) {
-            const isStrong = isItemStronglyRelevant({ type: 'video', title: rawTitle || titleText, author: authorText }, keyword);
-            if (isStrong) return false;
-
+            if (isItemStronglyRelevant({ type: 'video', title: rawTitle || titleText, author: authorText }, keyword)) return false;
             if (getFilterStrength() === STRENGTH_WEAK) {
-                for (const tag of globalTagPool) {
-                    if (tag.length >= 2 && titleText.includes(tag)) return false;
-                }
+                for (const tag of globalTagPool) if (tag.length >= 2 && titleText.includes(tag)) return false;
             }
             return true;
         }
-
         return false;
     }
 
     function applyCardInteraction(card) {
         if (card.dataset.biliPurifyBound) return;
         card.dataset.biliPurifyBound = '1';
-
         card.addEventListener('click', (e) => {
-            if (card.classList.contains('bili-purify-blurred') && !card.classList.contains('bili-purify-unblurred')) {
-                e.preventDefault();
-                e.stopPropagation();
-                card.classList.add('bili-purify-unblurred');
+            if (!card.classList.contains('bili-purify-blurred') || e?.target?.closest('a')) return;
+            const a = card.querySelector('a[href*="/video/"]');
+            if (!a) return;
+            if (typeof a.click === 'function') a.click();
+            else if (typeof window !== 'undefined' && typeof window.open === 'function') {
+                window.open(a.getAttribute?.('href') || a.href, a.target || '_blank');
             }
-        }, true);
+        });
     }
 
     function syncStateFromPage() {
         const keyword = getPageSearchKeyword();
         if (!keyword) return;
         const p = pageContext.__pinia;
+        const syncTarget = (obj) => {
+            if (obj && obj.__bp_cleaned_kw !== keyword) {
+                obj.__bp_cleaned_kw = keyword;
+                cleanSearchDataPayload(obj, keyword);
+            }
+        };
         if (p) {
-            const sr1 = p.searchResponse?.searchAllResponse;
-            const sr2 = p.searchTypeResponse?.searchTypeResponse;
-            if (sr1 && sr1.__bp_cleaned_kw !== keyword) {
-                sr1.__bp_cleaned_kw = keyword;
-                cleanSearchDataPayload(sr1, keyword);
-            }
-            if (sr2 && sr2.__bp_cleaned_kw !== keyword) {
-                sr2.__bp_cleaned_kw = keyword;
-                cleanSearchDataPayload(sr2, keyword);
-            }
+            syncTarget(p.searchResponse?.searchAllResponse);
+            syncTarget(p.searchTypeResponse?.searchTypeResponse);
         }
-        const s = pageContext.__INITIAL_STATE__;
-        if (s && s.__bp_cleaned_kw !== keyword) {
-            s.__bp_cleaned_kw = keyword;
-            cleanSearchDataPayload(s, keyword);
-        }
+        syncTarget(pageContext.__INITIAL_STATE__);
     }
 
     function applyDomInspection() {
