@@ -34,11 +34,11 @@
     let currentActiveKeyword = '';
 
     function resetContextIfKeywordChanged(kw) {
-        const norm = (kw || '').trim().toLowerCase();
-        if (norm && currentActiveKeyword && currentActiveKeyword !== norm) {
+        const norm = kw.trim().toLowerCase();
+        if (currentActiveKeyword !== norm) {
             [relevantBvids, irrelevantBvids, relevantAids, irrelevantAids, relevantTitleSet, irrelevantTitleSet, globalTagPool, loggedBvids, loggedKeptBvids, tagAnalyzedVideos, tagStatsMap].forEach(s => s.clear());
+            currentActiveKeyword = norm;
         }
-        if (norm) currentActiveKeyword = norm;
     }
 
     const getStorage = (k, d) => { try { return typeof GM_getValue !== 'undefined' ? (GM_getValue(k, d) ?? d) : (localStorage.getItem(k) || d); } catch (e) { return d; } };
@@ -72,7 +72,6 @@
     }
 
     function tokenizeSearchKeyword(keyword) {
-        if (!keyword || typeof keyword !== 'string') return [];
         const norm = keyword.replace(/[+_,，/\\|]+/g, ' ').toLowerCase(), tokenSet = new Set();
         norm.split(/\s+/).forEach(t => t && tokenSet.add(t));
         for (const seg of norm.match(/[\u4e00-\u9fa5]+|[a-z0-9]+/gi) || []) {
@@ -112,11 +111,8 @@
 
     function isItemStronglyRelevant(item, searchKeyword) {
         if (!item || (item.type && item.type !== 'video')) return false;
-        const cleanKw = (searchKeyword || '').trim().toLowerCase();
-        if (!cleanKw) return false;
-
+        const cleanKw = searchKeyword.trim().toLowerCase();
         const tokens = tokenizeSearchKeyword(cleanKw);
-        if (tokens.length === 0) return true;
         if (hasOfficialKeywordHighlight(item, tokens) || (Array.isArray(item.hit_columns) && item.hit_columns.length > 0)) return true;
 
         const title = stripHtml(item.title).toLowerCase(), tag = stripHtml(item.tag).toLowerCase();
@@ -266,8 +262,8 @@
 
     function cleanSearchDataPayload(c, kw) {
         if (!c || typeof c !== 'object') return c;
-        const cleanKw = (kw || getPageSearchKeyword() || '').trim().toLowerCase();
-        if (cleanKw) resetContextIfKeywordChanged(cleanKw);
+        const cleanKw = (kw || getPageSearchKeyword()).trim().toLowerCase();
+        resetContextIfKeywordChanged(cleanKw);
         if (c.data && typeof c.data === 'object') return cleanSearchDataPayload(c.data, cleanKw), c;
         if (c.searchResponse?.searchAllResponse) cleanSearchDataPayload(c.searchResponse.searchAllResponse, cleanKw);
         if (c.searchTypeResponse?.searchTypeResponse) cleanSearchDataPayload(c.searchTypeResponse.searchTypeResponse, cleanKw);
@@ -388,7 +384,7 @@
         const authorEl = card.querySelector('.bili-video-card__info--author, .bili-video-card__author');
         const authorText = (authorEl?.innerText || '').trim();
 
-        if (keyword && (titleText || authorText)) {
+        if (titleText || authorText) {
             if (isItemStronglyRelevant({ type: 'video', title: rawTitle || titleText, author: authorText }, keyword)) return false;
             if (getFilterStrength() === STRENGTH_WEAK) {
                 for (const [tag] of globalTagPool) if (tag.length >= 2 && titleText.includes(tag)) return false;
@@ -408,32 +404,10 @@
         });
     }
 
-    function syncStateFromPage() {
-        const keyword = getPageSearchKeyword();
-        if (!keyword) return;
-        const p = pageContext.__pinia;
-        const syncTarget = (obj) => {
-            if (obj && obj.__bp_cleaned_kw !== keyword) {
-                obj.__bp_cleaned_kw = keyword;
-                cleanSearchDataPayload(obj, keyword);
-            }
-        };
-        if (p) {
-            syncTarget(p.searchResponse?.searchAllResponse);
-            syncTarget(p.searchTypeResponse?.searchTypeResponse);
-        }
-        if (pageContext.__INITIAL_STATE__ && !pageContext.__INITIAL_STATE__.__bp_cleaned_kw) {
-            syncTarget(pageContext.__INITIAL_STATE__);
-        }
-    }
-
     function applyDomInspection() {
         if (typeof document === 'undefined') return;
 
         const keyword = getPageSearchKeyword();
-        resetContextIfKeywordChanged(keyword);
-        syncStateFromPage();
-
         const currentMode = getDisplayMode();
         document.querySelectorAll('.bili-video-card').forEach(card => {
             applyCardInteraction(card);
@@ -453,21 +427,10 @@
         });
     }
 
-    function hookHistoryNavigation() {
-        const onNav = () => { const k = getPageSearchKeyword(); if (k) { resetContextIfKeywordChanged(k); applyDomInspection(); } };
-        ['pushState', 'replaceState'].forEach(m => {
-            const orig = pageContext.history?.[m];
-            if (orig) pageContext.history[m] = function(...args) { const r = orig.apply(this, args); onNav(); return r; };
-        });
-        pageContext.addEventListener?.('popstate', onNav);
-    }
-
     function init() {
         installFetchHook();
         installXhrHook();
         hookGlobalObject('__pinia');
-        hookGlobalObject('__INITIAL_STATE__');
-        hookHistoryNavigation();
         registerTampermonkeyMenu();
         pageContext.__bili_purify_inspect = applyDomInspection;
 
