@@ -168,7 +168,7 @@
             if (vid) tagAnalyzedVideos.add(vid);
             const tags = Array.from(new Set(extractItemTags(item))).filter(t => !GENERIC_TAGS.has(t));
             if (!tags.length) return;
-            const discount = 1 / Math.sqrt(tags.length);
+            const discount = tags.length <= 7 ? 1 : Math.round(((7 / tags.length) ** 1.5) * 100) / 100;
             tags.forEach(t => {
                 const s = tagStatsMap.get(t) || { score: 0 };
                 s.score += discount;
